@@ -1,0 +1,28 @@
+---
+- name: Instalar actualizaciones de Windows
+  hosts: windows
+  gather_facts: false
+  serial: 1
+
+  vars:
+    windows_update_categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+      - Updates
+
+  tasks:
+    - name: Buscar e instalar actualizaciones aprobadas
+      ansible.windows.win_updates:
+        category_names: "{{ windows_update_categories }}"
+        state: installed
+        reboot: true
+        reboot_timeout: 3600
+      register: windows_updates
+
+    - name: Informar resultado de la instalación
+      ansible.builtin.debug:
+        msg:
+          found_update_count: "{{ windows_updates.found_update_count | default(0) }}"
+          installed_update_count: "{{ windows_updates.installed_update_count | default(0) }}"
+          reboot_required: "{{ windows_updates.reboot_required | default(false) }}"
