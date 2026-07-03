@@ -1,0 +1,28 @@
+---
+- name: Validar conectividad WinRM con Windows
+  hosts: windows
+  gather_facts: false
+
+  tasks:
+    - name: Probar conexión Ansible/WinRM
+      ansible.windows.win_ping:
+
+    - name: Consultar versión del sistema operativo
+      ansible.windows.win_shell: |
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem
+        $memoryGb = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
+        $diskGb = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" |
+          Measure-Object -Property Size -Sum |
+          Select-Object -ExpandProperty Sum
+        $diskGb = [math]::Round($diskGb / 1GB, 2)
+
+        "Sistema operativo: $($os.Caption)"
+        "Version: $($os.Version)"
+        "Memoria RAM total: $memoryGb GB"
+        "Espacio total en disco: $diskGb GB"
+      changed_when: false
+      register: windows_version
+
+    - name: Mostrar versión del sistema operativo
+      ansible.builtin.debug:
+        var: windows_version.stdout_lines
