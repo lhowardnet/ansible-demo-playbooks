@@ -1,0 +1,110 @@
+---
+- name: Instalar aplicacion demo en Windows
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    app_display_name: "Demo App RedSoft"
+    app_version: "1.0.0"
+    app_publisher: "RedSoft"
+    install_dir: "C:\\Program Files\\Demo App RedSoft"
+    app_script: "C:\\Program Files\\Demo App RedSoft\\DemoApp.ps1"
+    uninstall_script: "C:\\Windows\\Temp\\DemoAppRedSoft-Uninstall.ps1"
+    shortcut_name: "Demo App RedSoft.lnk"
+    uninstall_key: "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\DemoAppRedSoft"
+
+  tasks:
+    - name: Crear carpeta de instalacion
+      ansible.windows.win_file:
+        path: "{{ install_dir }}"
+        state: directory
+
+    - name: Crear archivo de la aplicacion demo
+      ansible.windows.win_copy:
+        dest: "{{ app_script }}"
+        content: |
+          Add-Type -AssemblyName PresentationFramework
+          [System.Windows.MessageBox]::Show(
+            "Aplicacion instalada por Ansible Automation Platform.",
+            "Demo App RedSoft"
+          )
+
+    - name: Crear script de desinstalacion
+      ansible.windows.win_copy:
+        dest: "{{ uninstall_script }}"
+        content: |
+          $appName = "Demo App RedSoft"
+          $installDir = "C:\Program Files\Demo App RedSoft"
+          $shortcutPath = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) "Demo App RedSoft.lnk"
+          $uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DemoAppRedSoft"
+
+          if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $installDir) {
+            Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $uninstallKey) {
+            Remove-Item $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          exit 0
+
+    - name: Crear acceso directo en el escritorio publico
+      ansible.windows.win_powershell:
+        script: |
+          $target = "powershell.exe"
+          $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{{ app_script }}"'
+          $desktopPath = [Environment]::GetFolderPath('CommonDesktopDirectory')
+          $shortcutPath = Join-Path $desktopPath "{{ shortcut_name }}"
+
+          $shell = New-Object -ComObject WScript.Shell
+          $shortcut = $shell.CreateShortcut($shortcutPath)
+          $shortcut.TargetPath = $target
+          $shortcut.Arguments = $arguments
+          $shortcut.WorkingDirectory = "{{ install_dir }}"
+          $shortcut.IconLocation = "C:\Windows\System32\shell32.dll,2"
+          $shortcut.Description = "{{ app_display_name }}"
+          $shortcut.Save()
+
+          [pscustomobject]@{
+            shortcut = $shortcutPath
+            target = $target
+            arguments = $arguments
+          } | ConvertTo-Json
+
+    - name: Registrar aplicacion en Programas instalados de Windows
+      ansible.windows.win_powershell:
+        script: |
+          $uninstallKey = "{{ uninstall_key }}"
+
+          if (-not (Test-Path $uninstallKey)) {
+            New-Item -Path $uninstallKey -Force | Out-Null
+          }
+
+          New-ItemProperty -Path $uninstallKey -Name "DisplayName" -Value "{{ app_display_name }}" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "DisplayVersion" -Value "{{ app_version }}" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "Publisher" -Value "{{ app_publisher }}" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "InstallLocation" -Value "{{ install_dir }}" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "DisplayIcon" -Value "C:\Windows\System32\shell32.dll,2" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "UninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"{{ uninstall_script }}`"" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "QuietUninstallString" -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"{{ uninstall_script }}`"" -PropertyType String -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "NoModify" -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $uninstallKey -Name "NoRepair" -Value 1 -PropertyType DWord -Force | Out-Null
+
+          [pscustomobject]@{
+            display_name = "{{ app_display_name }}"
+            version = "{{ app_version }}"
+            publisher = "{{ app_publisher }}"
+            uninstall_key = $uninstallKey
+          } | ConvertTo-Json
+
+    - name: Mostrar resultado
+      ansible.builtin.debug:
+        msg:
+          aplicacion: "{{ app_display_name }}"
+          estado: "Instalada correctamente"
+          escritorio: "Icono creado en el escritorio publico"
+          desinstalacion: "Usar app_name='{{ app_display_name }}'"
