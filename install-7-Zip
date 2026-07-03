@@ -1,0 +1,85 @@
+---
+- name: Instalar 7-Zip en Windows y crear icono en escritorio
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    package_id: "7zip.7zip"
+    app_name: "7-Zip"
+
+  tasks:
+    - name: Validar si 7-Zip ya esta instalado
+      ansible.windows.win_shell: |
+        winget list --id {{ package_id }} --exact
+      register: check_7zip
+      changed_when: false
+      failed_when: false
+
+    - name: Instalar 7-Zip usando winget
+      ansible.windows.win_shell: |
+        winget install --id {{ package_id }} --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+      register: install_7zip
+      when: check_7zip.rc != 0
+      changed_when: true
+
+    - name: Esperar a que exista el ejecutable de 7-Zip
+      ansible.windows.win_shell: |
+        $possiblePaths = @(
+          "$env:ProgramFiles\7-Zip\7zFM.exe",
+          "${env:ProgramFiles(x86)}\7-Zip\7zFM.exe"
+        )
+
+        $exe = $possiblePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+        if (-not $exe) {
+          throw "No se encontro el ejecutable de 7-Zip."
+        }
+
+        Write-Output $exe
+      register: sevenzip_exe
+      changed_when: false
+
+    - name: Crear icono de 7-Zip en el escritorio publico
+      ansible.windows.win_powershell:
+        script: |
+          $exePath = @'
+          {{ sevenzip_exe.stdout | trim }}
+          '@.Trim()
+
+          $desktopPath = [Environment]::GetFolderPath('CommonDesktopDirectory')
+          $shortcutPath = Join-Path $desktopPath '7-Zip File Manager.lnk'
+
+          $shell = New-Object -ComObject WScript.Shell
+          $shortcut = $shell.CreateShortcut($shortcutPath)
+          $shortcut.TargetPath = $exePath
+          $shortcut.WorkingDirectory = Split-Path $exePath
+          $shortcut.IconLocation = "$exePath,0"
+          $shortcut.Description = "7-Zip File Manager"
+          $shortcut.Save()
+
+          [pscustomobject]@{
+            shortcut = $shortcutPath
+            target = $exePath
+          }
+
+    - name: Validar instalacion desde el registro de Windows
+      ansible.windows.win_shell: |
+        $registryPaths = @(
+          'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+
+        Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -like "*{{ app_name }}*" } |
+          Select-Object DisplayName, DisplayVersion, Publisher |
+          ConvertTo-Json -Depth 3
+      register: installed_app
+      changed_when: false
+
+    - name: Mostrar resultado de instalacion
+      ansible.builtin.debug:
+        msg:
+          aplicacion: "{{ app_name }}"
+          estado: "Instalado o ya existente"
+          icono: "Creado en el escritorio publico"
+          detalle: "{{ installed_app.stdout }}"
