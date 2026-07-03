@@ -1,0 +1,114 @@
+---
+- name: Desinstalar una aplicacion en Windows
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    app_name: "{{ app_name | default('') | trim }}"
+
+  tasks:
+    - name: Validar que se proporciono el nombre de la aplicacion
+      ansible.builtin.assert:
+        that:
+          - app_name | length > 0
+        fail_msg: >
+          Debes indicar el nombre de la aplicacion con -e "app_name=..."
+          o usando APP_NAME en make.
+
+    - name: Localizar la aplicacion instalada
+      ansible.windows.win_shell: |
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        $appName = {{ app_name | to_json }}
+        $registryPaths = @(
+          'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+
+        $matches = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -and $_.DisplayName -like "*$appName*" } |
+          Sort-Object DisplayName, DisplayVersion -Unique
+
+        if (-not $matches) {
+          throw "No se encontro ninguna aplicacion que coincida con '$appName'."
+        }
+
+        if ($matches.Count -gt 1) {
+          $names = $matches | ForEach-Object { "$($_.DisplayName) [$($_.DisplayVersion)]" }
+          throw "Se encontraron varias coincidencias: $($names -join ', '). Refina APP_NAME."
+        }
+
+        $match = $matches | Select-Object -First 1
+        $productId = if ($match.PSChildName -match '^\{[0-9A-Fa-f-]+\}$') {
+          $match.PSChildName
+        } else {
+          $null
+        }
+
+        [pscustomobject]@{
+          display_name = $match.DisplayName
+          display_version = $match.DisplayVersion
+          publisher = $match.Publisher
+          product_id = $productId
+          uninstall_string = $match.UninstallString
+          quiet_uninstall_string = $match.QuietUninstallString
+        } | ConvertTo-Json -Depth 3
+      changed_when: false
+      register: target_app
+
+    - name: Normalizar metadata de la aplicacion objetivo
+      ansible.builtin.set_fact:
+        target_app_info: "{{ target_app.stdout | from_json }}"
+
+    - name: Desinstalar usando Windows Installer cuando haya product_id
+      ansible.windows.win_package:
+        product_id: "{{ target_app_info.product_id }}"
+        state: absent
+      when: (target_app_info.product_id | default('', true)) | length > 0
+      register: uninstall_package
+
+    - name: Desinstalar usando el comando registrado cuando no haya product_id
+      ansible.windows.win_powershell:
+        script: |
+          $quiet = @'
+          {{ target_app_info.quiet_uninstall_string | default('', true) }}
+          '@.Trim()
+          $uninstall = @'
+          {{ target_app_info.uninstall_string | default('', true) }}
+          '@.Trim()
+          $command = if ($quiet) { $quiet } else { $uninstall }
+
+          if (-not $command) {
+            throw "La aplicacion no expone un comando de desinstalacion utilizable."
+          }
+
+          if ($command -match 'msiexec(\.exe)?') {
+            if ($command -notmatch '(^|\s)/x(\s|$)') {
+              $command = $command -replace '(?i)(^.*msiexec(?:\.exe)?)', '$1 /x'
+            }
+            if ($command -notmatch '(^|\s)/qn(\s|$)') {
+              $command = "$command /qn /norestart"
+            }
+          }
+
+          $process = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', $command -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "La desinstalacion finalizo con codigo $($process.ExitCode)."
+          }
+
+          [pscustomobject]@{
+            command = $command
+            exit_code = $process.ExitCode
+          }
+      when: (target_app_info.product_id | default('', true)) | length == 0
+      register: uninstall_command
+
+    - name: Informar resultado de la desinstalacion
+      ansible.builtin.debug:
+        msg:
+          app_name: "{{ target_app_info.display_name }}"
+          version: "{{ target_app_info.display_version | default('desconocida') }}"
+          changed: >-
+            {{
+              (uninstall_package.changed | default(false)) or
+              (uninstall_command.changed | default(false))
+            }}
