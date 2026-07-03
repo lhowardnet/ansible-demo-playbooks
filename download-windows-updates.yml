@@ -1,0 +1,28 @@
+---
+- name: Descargar actualizaciones de Windows sin instalarlas
+  hosts: windows
+  gather_facts: false
+  serial: 1
+
+  vars:
+    windows_update_categories:
+      - CriticalUpdates
+      - SecurityUpdates
+      - UpdateRollups
+      - Updates
+
+  tasks:
+    - name: Buscar y descargar actualizaciones disponibles
+      ansible.windows.win_updates:
+        category_names: "{{ windows_update_categories }}"
+        state: downloaded
+        reboot: false
+      register: windows_updates
+
+    - name: Mostrar actualizaciones descargadas
+      ansible.builtin.debug:
+        msg:
+          found_update_count: "{{ windows_updates.found_update_count | default(0) }}"
+          installed_update_count: "{{ windows_updates.installed_update_count | default(0) }}"
+          reboot_required: "{{ windows_updates.reboot_required | default(false) }}"
+          updates: "{{ windows_updates.updates | default({}) }}"
